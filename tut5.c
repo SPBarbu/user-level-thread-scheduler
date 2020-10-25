@@ -22,9 +22,13 @@ void f2(void* main, void* self) {
     }
 }
 
+// void test_uc_link_behavior() {
+//     printf("returning\n");
+// }
+
 int main() {
 
-    ucontext_t t1, t2, m;
+    ucontext_t t1, t2, m; //t3
     char f1stack[16 * 1024];
     char f2stack[16 * 1024];
 
@@ -39,6 +43,21 @@ int main() {
     t2.uc_stack.ss_size = sizeof(f2stack);
     t2.uc_link = &m;
     makecontext(&t2, (void(*)(void))f2, 2, &m, &t2);//cast to accomodate makecontext signature
+
+    // getcontext(&t3);
+    // t3.uc_stack.ss_sp = f1stack;
+    // t3.uc_stack.ss_size = sizeof(f1stack);
+    // t3.uc_link = &m;
+    // makecontext(&t3, (void(*)(void))test_uc_link_behavior, 0);
+    // swapcontext(&m, &t3);
+    // printf("returned\n");
+    // swapcontext(&m, &t3);
+
+    /**
+     * Prints, returning\n returned\n returning\n
+     * Indicating that swapping context with a terminated task
+     * makes it restart from the beginning
+     */
 
     while (true) {
         swapcontext(&m, &t1);//swap our context to t1 context. m is initialized and swapped
