@@ -8,7 +8,7 @@
             "name": "Assignment 2",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/mytest",
+            "program": "${workspaceFolder}/ults",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
