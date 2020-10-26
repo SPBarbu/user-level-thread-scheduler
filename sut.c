@@ -13,7 +13,6 @@ int numThreads;
 bool shutdown;
 pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mxShutdown = PTHREAD_MUTEX_INITIALIZER;
 struct queue qReadyThreads;//FIFO queue
 
 void sut_init() {
@@ -93,9 +92,7 @@ char* sut_read() {
 }
 
 void sut_shutdown() {
-    pthread_mutex_lock(&mxShutdown);//maybe dont need to lock since only one writer
-    shutdown = true;
-    pthread_mutex_unlock(&mxShutdown);
+    shutdown = true;//no lock b/c only writer
 
     pthread_join(CEXEC_handle, NULL);
     pthread_join(IEXEC_handle, NULL);
@@ -109,7 +106,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
             swapcontext(&CEXEC_context, (ucontext_t*)(node->data));
 
             //once come back from context swap
-            if (node == queue_peek_front(&qReadyThreads)) {//same context after as before swap means sut_exit not called
+            if (!contextToCleanOnExit) {//if nothing scheduled to clean means sut_exit not called
                 pthread_mutex_lock(&mxQReadyThreads);
                 node = queue_pop_head(&qReadyThreads);//extract node
                         //should be last task executed since CEXEC only manipulator of head of queue
@@ -119,11 +116,21 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
                 }
                 pthread_mutex_unlock(&mxQReadyThreads);
             }
-            else {//sut_exit called
+            if (contextToCleanOnExit) {//if scheduled to clean means sut_exit called
                //free allocated mem to context
                 free(((ucontext_t*)contextToCleanOnExit->data)->uc_stack.ss_sp);
                 free((ucontext_t*)contextToCleanOnExit->data);
                 free(contextToCleanOnExit);//mem for queue node
+            }
+            else {
+                pthread_mutex_lock(&mxQReadyThreads);
+                node = queue_pop_head(&qReadyThreads);//extract node
+                        //should be last task executed since CEXEC only manipulator of head of queue
+                if (node) {//if there remains tasks in queue. b/c task may have called sut_exit while being the last task in queue
+                    queue_insert_tail(&qReadyThreads, node);//reinsert last
+                    //task after one that called sut_exit will be delayed by one cycle
+                }
+                pthread_mutex_unlock(&mxQReadyThreads);
             }
 
         }
