@@ -43,7 +43,7 @@ bool sut_create(sut_task_f fn) {
     getcontext(tContext);
     tContext->uc_stack.ss_sp = tStack;//stack pointer
     tContext->uc_stack.ss_size = THREAD_STACK_SIZE;//stack size
-    tContext->uc_link = NULL;//return to on task terminate
+    tContext->uc_link = &CEXEC_context;//return to on task terminate
         //error state, shouldnt be allowed to terminate on its own; call sut_exit()
     makecontext(tContext, fn, 0);
 
@@ -56,7 +56,11 @@ bool sut_create(sut_task_f fn) {
     return true;
 }
 void sut_yield() {
+    struct queue_entry* selfNode;
 
+    selfNode = queue_peek_front(&qReadyThreads);//expect first node to be self if FIFO
+        //no need lock b/c solo running on CEXEC_thread & dont expect to be swapped b/c cooperative threading
+    swapcontext((ucontext_t*)(selfNode->data), &CEXEC_context);
 }
 void sut_exit() {
 
@@ -101,11 +105,11 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
             queue_insert_tail(&qReadyThreads, node);//reinsert at back
             pthread_mutex_unlock(&mxQReadyThreads);
 
-            swapcontext(&CEXEC_context, (ucontext_t*)node->data);
+            swapcontext(&CEXEC_context, (ucontext_t*)(node->data));
         }
         else {
             pthread_mutex_unlock(&mxQReadyThreads);
-            
+
             usleep(1000 * 10);//10ms
         }
     }
