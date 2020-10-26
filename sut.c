@@ -121,6 +121,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
                 free(((ucontext_t*)contextToCleanOnExit->data)->uc_stack.ss_sp);
                 free((ucontext_t*)contextToCleanOnExit->data);
                 free(contextToCleanOnExit);//mem for queue node
+                contextToCleanOnExit = 0;
             }
             else {
                 pthread_mutex_lock(&mxQReadyThreads);
@@ -135,7 +136,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 
         }
         else {
-            usleep(1000 * 10);//10ms
+            usleep(100);//100us
         }
     }
     return NULL;
