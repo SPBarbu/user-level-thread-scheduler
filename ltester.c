@@ -3,26 +3,29 @@
 #include <unistd.h>
 
 void hello1() {
-    while (true) {
-        printf("Hello from hello1\n");
+    for (int i = 0; i < 5; i++) {
+        printf("%d Hello from hello1\n", i);
         usleep(1000 * 1000);
         sut_yield();
     }
+    sut_exit();
 }
 void hello2() {
-    while (true) {
-        printf("Hello from hello2\n");
+    for (int i = 0; i < 5; i++) {
+        printf("%d Hello from hello2\n", i);
         usleep(1000 * 1000);
         sut_yield();
     }
+    sut_exit();
 }
 
 void hello3() {
-    while (true) {
-        printf("Hello from hello3\n");
+    for (int i = 0; i < 5; i++) {
+        printf("%d Hello from hello3\n", i);
         usleep(1000 * 1000);
         sut_yield();
     }
+    sut_exit();
 }
 
 int main() {
@@ -30,7 +33,5 @@ int main() {
     sut_create(hello1);
     sut_create(hello2);
     sut_create(hello3);
-    while (true) {
-        usleep(1000 * 1000);
-    }
+    sut_shutdown();
 }

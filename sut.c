@@ -9,8 +9,10 @@ void* thread_IEXEC(void* args);
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
 int numThreads;
+bool shutdown = false;
 pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mxShutdown = PTHREAD_MUTEX_INITIALIZER;
 struct queue qReadyThreads;//FIFO queue
 
 void sut_init() {
@@ -18,6 +20,8 @@ void sut_init() {
 
     qReadyThreads = queue_create();
     queue_init(&qReadyThreads);//never move, only refer through pointer indirect
+
+    struct queue_entry* node = queue_pop_head(&qReadyThreads);
 
     pthread_create(&CEXEC_handle, NULL, thread_CEXEC, NULL);
     pthread_create(&IEXEC_handle, NULL, thread_IEXEC, NULL);
@@ -64,7 +68,11 @@ void sut_yield() {
 }
 
 void sut_exit() {
-
+    ucontext_t current;//free stack to lose var
+    pthread_mutex_lock(&mxQReadyThreads);//prevents data race on q when sut_exit & sut_create
+    queue_pop_head(&qReadyThreads);//extract & never put back
+    pthread_mutex_unlock(&mxQReadyThreads);
+    swapcontext(&current, &CEXEC_context);
 }
 
 void sut_open(char* dest, int port) {
@@ -84,43 +92,32 @@ char* sut_read() {
 }
 
 void sut_shutdown() {
+    pthread_mutex_lock(&mxShutdown);//maybe dont need to lock since only one writer
+    shutdown = true;
+    pthread_mutex_unlock(&mxShutdown);
 
+    pthread_join(CEXEC_handle, NULL);
+    pthread_join(IEXEC_handle, NULL);
 }
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
-
-    // for (int i = 0; i < 5; i++) {
-    //     int* j = malloc(sizeof(i));
-    //     *j = i;
-    //     struct queue_entry* node = queue_new_node(j);
-    //     queue_insert_tail(&qReadyThreads, node);
-    // }
-    // struct queue_entry* ptr;
-    // for (int i = 0; i < 5; i++) {
-    //     ptr = queue_pop_head(&qReadyThreads);
-    //     printf("cleaning %d\n", *(int*)ptr->data);
-    //     free(ptr);
-    // }
     struct queue_entry* node;
-
-    while (true) {
-        pthread_mutex_lock(&mxQReadyThreads);//prevent race condition on empty queues and thread_create
-        node = queue_peek_front(&qReadyThreads);
+    while (!shutdown || (node = queue_peek_front(&qReadyThreads))) {
         if (node) {//if there are tasks queued
-            pthread_mutex_unlock(&mxQReadyThreads);
 
             swapcontext(&CEXEC_context, (ucontext_t*)(node->data));
 
             //once come back from context swap
             pthread_mutex_lock(&mxQReadyThreads);
             node = queue_pop_head(&qReadyThreads);//extract node
-                //should be last task executed since CEXEC only manipulator of head of queue
-            queue_insert_tail(&qReadyThreads, node);//reinsert ast
+                    //should be last task executed since CEXEC only manipulator of head of queue
+            if (node) {//if there remains tasks in queue. b/c task may have called sut_exit while being the last task in queue
+                queue_insert_tail(&qReadyThreads, node);//reinsert last
+                //task after one that called sut_exit will be delayed by one cycle
+            }
             pthread_mutex_unlock(&mxQReadyThreads);
         }
         else {
-            pthread_mutex_unlock(&mxQReadyThreads);
-
             usleep(1000 * 10);//10ms
         }
     }
