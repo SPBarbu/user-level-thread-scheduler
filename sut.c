@@ -2,7 +2,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/prctl.h>
-#include "queue/queue.h"
+#include "queue.h"
 
 void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
@@ -23,6 +23,7 @@ void sut_init() {
     pthread_create(&CEXEC_handle, NULL, thread_CEXEC, NULL);
     pthread_create(&IEXEC_handle, NULL, thread_IEXEC, NULL);
 }
+
 bool sut_create(sut_task_f fn) {
 
     pthread_mutex_lock(&mxNumThreads);//prevent data race on threads spawning threads
@@ -55,28 +56,34 @@ bool sut_create(sut_task_f fn) {
 
     return true;
 }
+
 void sut_yield() {
     struct queue_entry* selfNode;
-
     selfNode = queue_peek_front(&qReadyThreads);//expect first node to be self if FIFO
         //no need lock b/c solo running on CEXEC_thread & dont expect to be swapped b/c cooperative threading
     swapcontext((ucontext_t*)(selfNode->data), &CEXEC_context);
 }
+
 void sut_exit() {
 
 }
+
 void sut_open(char* dest, int port) {
 
 }
+
 void sut_write(char* buf, int size) {
 
 }
+
 void sut_close() {
 
 }
+
 char* sut_read() {
     return 0;
 }
+
 void sut_shutdown() {
 
 }
@@ -84,11 +91,11 @@ void sut_shutdown() {
 void* thread_CEXEC(void* args) {//main of the C-Exec
 
     // for (int i = 0; i < 5; i++) {
-    //     struct queue_entry* node = queue_new_node(&j);
+    //     int* j = malloc(sizeof(i));
+    //     *j = i;
+    //     struct queue_entry* node = queue_new_node(j);
     //     queue_insert_tail(&qReadyThreads, node);
     // }
-    // int* p = (int*)0x7ffff5d57e68;
-    // *p = 3;
     // struct queue_entry* ptr;
     // for (int i = 0; i < 5; i++) {
     //     ptr = queue_pop_head(&qReadyThreads);
@@ -100,9 +107,9 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
     while (true) {
         pthread_mutex_lock(&mxQReadyThreads);//prevent race condition on empty queues and thread_create
 
-        if (queue_peek_front(&qReadyThreads)) {//non empty queue
-            node = queue_pop_head(&qReadyThreads);
-            queue_insert_tail(&qReadyThreads, node);//reinsert at back
+        if (queue_peek_front(&qReadyThreads)) {//if non empty queue
+            node = queue_pop_head(&qReadyThreads);//extract node
+            queue_insert_tail(&qReadyThreads, node);//reinsert kast
             pthread_mutex_unlock(&mxQReadyThreads);
 
             swapcontext(&CEXEC_context, (ucontext_t*)(node->data));

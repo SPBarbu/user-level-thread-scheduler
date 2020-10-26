@@ -7,7 +7,7 @@
 #include <ucontext.h>
 
 #define MAX_THREADS 16
-#define THREAD_STACK_SIZE 1024*16
+#define THREAD_STACK_SIZE 1024*64
 
 typedef void (*sut_task_f)();
 
