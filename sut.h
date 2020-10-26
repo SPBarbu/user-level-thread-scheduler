@@ -13,8 +13,23 @@ typedef void (*sut_task_f)();
 
 typedef struct __tcb {
     ucontext_t* context;
-    int openHandle; // assumes tasks can only have one io source/destination at a time
+    int sockfd; // assumes tasks can only have one io source/destination at a time
 } tcb;
+
+typedef struct __IOmessage {
+    int sockfd;
+    enum __rType { _open, _close, _message } rType;
+    union __request {
+        struct __remote {
+            char* dest;
+            int port;
+        }remote;
+        struct __message {
+            char message[128];
+            int size;
+        }message;
+    }request;
+}IOmessage;
 
 void sut_init();
 bool sut_create(sut_task_f fn);

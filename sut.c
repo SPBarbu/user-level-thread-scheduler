@@ -9,11 +9,14 @@ void* thread_IEXEC(void* args);
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
 struct queue_entry* contextToCleanOnExit;
+struct queue_entry* contextWaitingForIO;//assumes only one waiter at a time ie. if two, last will overwrite first
 int numThreads;
 bool shutdown;
-pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;//prevent data race on create same time as exit
 pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mxContextWaitingForIO_mxIOMessage = PTHREAD_MUTEX_INITIALIZER;//shared between CEXEC & IEXEC
 struct queue qReadyThreads;//FIFO queue
+IOmessage ioMessage;
 
 void sut_init() {
     numThreads = 0;
@@ -71,6 +74,10 @@ void sut_yield() {
 }
 
 void sut_exit() {
+    pthread_mutex_lock(&mxNumThreads);
+    numThreads--;
+    pthread_mutex_unlock(&mxNumThreads);
+
     pthread_mutex_lock(&mxQReadyThreads);//prevents data race on q when sut_exit & sut_create
     contextToCleanOnExit = queue_pop_head(&qReadyThreads);//extract & never put back
     pthread_mutex_unlock(&mxQReadyThreads);
@@ -78,6 +85,26 @@ void sut_exit() {
 }
 
 void sut_open(char* dest, int port) {
+    struct queue_entry* nodeSelf;
+    //sut_open blocking so pop from ready queue
+    pthread_mutex_lock(&mxQReadyThreads);
+    nodeSelf = queue_pop_head(&qReadyThreads);//first is self
+    pthread_mutex_unlock(&mxQReadyThreads);
+
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
+    contextWaitingForIO = nodeSelf;//place self on IO waiting
+
+    //build IO message
+    ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage.rType = _open;
+    ioMessage.request.remote.dest = dest;
+    ioMessage.request.remote.port = port;
+
+    //expect CEXEC to unlock waiting&iomessage once context swapped
+    //no unlock = sut_open is blocking and returns after swap context
+    //dont want to unlock because swapcontext will write to contextWaitingForIO which is shared with IEXEC
+
+    swapcontext(((tcb*)contextWaitingForIO->data)->context, CEXEC_handle);
 
 }
 
@@ -102,22 +129,13 @@ void sut_shutdown() {
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
     struct queue_entry* node;
-    while (!shutdown || (node = queue_peek_front(&qReadyThreads))) {
+    while (!shutdown || numThreads) {
+        node = queue_peek_front(&qReadyThreads);
         if (node) {//if there are tasks queued
 
             swapcontext(&CEXEC_context, (ucontext_t*)((tcb*)node->data)->context);
 
             //once come back from context swap
-            if (!contextToCleanOnExit) {//if nothing scheduled to clean means sut_exit not called
-                pthread_mutex_lock(&mxQReadyThreads);
-                node = queue_pop_head(&qReadyThreads);//extract node
-                        //should be last task executed since CEXEC only manipulator of head of queue
-                if (node) {//if there remains tasks in queue. b/c task may have called sut_exit while being the last task in queue
-                    queue_insert_tail(&qReadyThreads, node);//reinsert last
-                    //task after one that called sut_exit will be delayed by one cycle
-                }
-                pthread_mutex_unlock(&mxQReadyThreads);
-            }
             if (contextToCleanOnExit) {//if scheduled to clean means sut_exit called
                //free allocated mem to context
                 free((ucontext_t*)(((tcb*)contextToCleanOnExit->data)->context)->uc_stack.ss_sp);
@@ -126,13 +144,15 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
                 free(contextToCleanOnExit);//mem for queue node
                 contextToCleanOnExit = 0;
             }
-            else {
+            else if (contextWaitingForIO) {
+                pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);//allows IEXEC to start working on waiters
+            }
+            else {//sut_exit not called, requeue task
                 pthread_mutex_lock(&mxQReadyThreads);
                 node = queue_pop_head(&qReadyThreads);//extract node
                         //should be last task executed since CEXEC only manipulator of head of queue
                 if (node) {//if there remains tasks in queue. b/c task may have called sut_exit while being the last task in queue
                     queue_insert_tail(&qReadyThreads, node);//reinsert last
-                    //task after one that called sut_exit will be delayed by one cycle
                 }
                 pthread_mutex_unlock(&mxQReadyThreads);
             }
