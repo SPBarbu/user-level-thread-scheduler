@@ -1,7 +1,6 @@
 #include "sut.h"
 #include <unistd.h>
 #include <stdio.h>
-#include <sys/prctl.h>
 #include "queue.h"
 
 void* thread_CEXEC(void* args);
@@ -25,7 +24,6 @@ void sut_init() {
 }
 
 bool sut_create(sut_task_f fn) {
-
     pthread_mutex_lock(&mxNumThreads);//prevent data race on threads spawning threads
     if (numThreads >= MAX_THREADS) {
         pthread_mutex_unlock(&mxNumThreads);
@@ -44,6 +42,7 @@ bool sut_create(sut_task_f fn) {
     getcontext(tContext);
     tContext->uc_stack.ss_sp = tStack;//stack pointer
     tContext->uc_stack.ss_size = THREAD_STACK_SIZE;//stack size
+    tContext->uc_stack.ss_flags = 0;
     tContext->uc_link = &CEXEC_context;//return to on task terminate
         //error state, shouldnt be allowed to terminate on its own; call sut_exit()
     makecontext(tContext, fn, 0);
@@ -106,13 +105,18 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 
     while (true) {
         pthread_mutex_lock(&mxQReadyThreads);//prevent race condition on empty queues and thread_create
-
-        if (queue_peek_front(&qReadyThreads)) {//if non empty queue
-            node = queue_pop_head(&qReadyThreads);//extract node
-            queue_insert_tail(&qReadyThreads, node);//reinsert kast
+        node = queue_peek_front(&qReadyThreads);
+        if (node) {//if there are tasks queued
             pthread_mutex_unlock(&mxQReadyThreads);
 
             swapcontext(&CEXEC_context, (ucontext_t*)(node->data));
+
+            //once come back from context swap
+            pthread_mutex_lock(&mxQReadyThreads);
+            node = queue_pop_head(&qReadyThreads);//extract node
+                //should be last task executed since CEXEC only manipulator of head of queue
+            queue_insert_tail(&qReadyThreads, node);//reinsert ast
+            pthread_mutex_unlock(&mxQReadyThreads);
         }
         else {
             pthread_mutex_unlock(&mxQReadyThreads);
