@@ -8,6 +8,7 @@ void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
 
 pthread_t CEXEC_handle, IEXEC_handle;
+ucontext_t CEXEC_context;
 int numThreads;
 pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
@@ -90,10 +91,23 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
     //     printf("cleaning %d\n", *(int*)ptr->data);
     //     free(ptr);
     // }
+    struct queue_entry* node;
 
     while (true) {
-        usleep(1000 * 1000);
-        printf("Hello from CEXEC\n");
+        pthread_mutex_lock(&mxQReadyThreads);//prevent race condition on empty queues and thread_create
+
+        if (queue_peek_front(&qReadyThreads)) {//non empty queue
+            node = queue_pop_head(&qReadyThreads);
+            queue_insert_tail(&qReadyThreads, node);//reinsert at back
+            pthread_mutex_unlock(&mxQReadyThreads);
+
+            swapcontext(&CEXEC_context, (ucontext_t*)node->data);
+        }
+        else {
+            pthread_mutex_unlock(&mxQReadyThreads);
+            
+            usleep(1000 * 10);//10ms
+        }
     }
     return NULL;
 }
