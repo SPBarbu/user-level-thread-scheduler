@@ -2,18 +2,57 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/prctl.h>
+#include "queue/queue.h"
 
 void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
 
+pthread_t CEXEC_handle, IEXEC_handle;
+int numThreads;
+pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
+struct queue qReadyThreads;//FIFO queue
+
 void sut_init() {
-    pthread_t CEXEC_handle, IEXEC_handle;
+    numThreads = 0;
+
+    qReadyThreads = queue_create();
+    queue_init(&qReadyThreads);//never move, only refer through pointer indirect
 
     pthread_create(&CEXEC_handle, NULL, thread_CEXEC, NULL);
     pthread_create(&IEXEC_handle, NULL, thread_IEXEC, NULL);
 }
 bool sut_create(sut_task_f fn) {
-    return false;
+
+    pthread_mutex_lock(&mxNumThreads);//prevent data race on threads spawning threads
+    if (numThreads >= MAX_THREADS) {
+        pthread_mutex_unlock(&mxNumThreads);
+        perror("Maximum thread limit reached. Creation failed!\n");
+        return false;
+    }
+    else {
+        numThreads++;
+        pthread_mutex_unlock(&mxNumThreads);
+    }
+
+    //make fn's context
+    ucontext_t* tContext = (ucontext_t*)malloc(sizeof(ucontext_t));
+    void* tStack = (void*)malloc(THREAD_STACK_SIZE);
+
+    getcontext(tContext);
+    tContext->uc_stack.ss_sp = tStack;//stack pointer
+    tContext->uc_stack.ss_size = THREAD_STACK_SIZE;//stack size
+    tContext->uc_link = NULL;//return to on task terminate
+        //error state, shouldnt be allowed to terminate on its own; call sut_exit()
+    makecontext(tContext, fn, 0);
+
+    struct queue_entry* node = queue_new_node(tContext);
+    //prevent data race on inserting node into shared queue
+    pthread_mutex_lock(&mxQReadyThreads);
+    queue_insert_tail(&qReadyThreads, node);//FIFO queue = insert tail
+    pthread_mutex_unlock(&mxQReadyThreads);
+
+    return true;
 }
 void sut_yield() {
 
@@ -38,6 +77,20 @@ void sut_shutdown() {
 }
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
+
+    // for (int i = 0; i < 5; i++) {
+    //     struct queue_entry* node = queue_new_node(&j);
+    //     queue_insert_tail(&qReadyThreads, node);
+    // }
+    // int* p = (int*)0x7ffff5d57e68;
+    // *p = 3;
+    // struct queue_entry* ptr;
+    // for (int i = 0; i < 5; i++) {
+    //     ptr = queue_pop_head(&qReadyThreads);
+    //     printf("cleaning %d\n", *(int*)ptr->data);
+    //     free(ptr);
+    // }
+
     while (true) {
         usleep(1000 * 1000);
         printf("Hello from CEXEC\n");

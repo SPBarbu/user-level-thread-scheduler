@@ -2,10 +2,13 @@
 #include <stdio.h>
 #include <unistd.h>
 
+void hello1() {
+    while (true) {
+        printf("Hello from hello1");
+    }
+}
+
 int main() {
     sut_init();
-    while (true) {
-        printf("loop");
-        usleep(1000 * 1000);
-    }
+    sut_create(hello1);
 }
