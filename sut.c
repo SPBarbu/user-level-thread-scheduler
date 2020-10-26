@@ -40,7 +40,8 @@ bool sut_create(sut_task_f fn) {
         pthread_mutex_unlock(&mxNumThreads);
     }
 
-    //make fn's context
+    //make tasks' context
+    tcb* tTcb = (tcb*)malloc(sizeof(tcb));
     ucontext_t* tContext = (ucontext_t*)malloc(sizeof(ucontext_t));
     void* tStack = (void*)malloc(THREAD_STACK_SIZE);
 
@@ -51,8 +52,9 @@ bool sut_create(sut_task_f fn) {
     tContext->uc_link = &CEXEC_context;//return to on task terminate
         //error state, shouldnt be allowed to terminate on its own; call sut_exit()
     makecontext(tContext, fn, 0);
+    tTcb->context = tContext;
 
-    struct queue_entry* node = queue_new_node(tContext);
+    struct queue_entry* node = queue_new_node(tTcb);
     //prevent data race on inserting node into shared queue
     pthread_mutex_lock(&mxQReadyThreads);
     queue_insert_tail(&qReadyThreads, node);//FIFO queue = insert tail
@@ -65,14 +67,14 @@ void sut_yield() {
     struct queue_entry* selfNode;
     selfNode = queue_peek_front(&qReadyThreads);//expect first node to be self if FIFO
         //no need lock b/c solo running on CEXEC_thread & dont expect to be swapped b/c cooperative threading
-    swapcontext((ucontext_t*)(selfNode->data), &CEXEC_context);
+    swapcontext((ucontext_t*)((tcb*)selfNode->data)->context, &CEXEC_context);
 }
 
 void sut_exit() {
     pthread_mutex_lock(&mxQReadyThreads);//prevents data race on q when sut_exit & sut_create
     contextToCleanOnExit = queue_pop_head(&qReadyThreads);//extract & never put back
     pthread_mutex_unlock(&mxQReadyThreads);
-    swapcontext(((ucontext_t*)contextToCleanOnExit->data), &CEXEC_context);
+    swapcontext((ucontext_t*)((tcb*)contextToCleanOnExit->data)->context, &CEXEC_context);
 }
 
 void sut_open(char* dest, int port) {
@@ -103,7 +105,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
     while (!shutdown || (node = queue_peek_front(&qReadyThreads))) {
         if (node) {//if there are tasks queued
 
-            swapcontext(&CEXEC_context, (ucontext_t*)(node->data));
+            swapcontext(&CEXEC_context, (ucontext_t*)((tcb*)node->data)->context);
 
             //once come back from context swap
             if (!contextToCleanOnExit) {//if nothing scheduled to clean means sut_exit not called
@@ -118,8 +120,9 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
             }
             if (contextToCleanOnExit) {//if scheduled to clean means sut_exit called
                //free allocated mem to context
-                free(((ucontext_t*)contextToCleanOnExit->data)->uc_stack.ss_sp);
-                free((ucontext_t*)contextToCleanOnExit->data);
+                free((ucontext_t*)(((tcb*)contextToCleanOnExit->data)->context)->uc_stack.ss_sp);
+                free((ucontext_t*)((tcb*)contextToCleanOnExit->data)->context);
+                free((tcb*)contextToCleanOnExit->data);
                 free(contextToCleanOnExit);//mem for queue node
                 contextToCleanOnExit = 0;
             }
