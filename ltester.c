@@ -26,8 +26,10 @@ void hello2() {
         usleep(1000);
         sut_yield();
     }
-    sut_open("0.0.0.0", 3001);
-    sut_write("*******", 8);
+    sut_open("0.0.0.0", 10000);
+    // sut_read();
+    sut_write("ls", 8);
+    printf("%s\n", sut_read());
     sut_close();
     sut_exit();
 }

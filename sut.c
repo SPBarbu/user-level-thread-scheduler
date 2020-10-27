@@ -1,14 +1,18 @@
 #include <unistd.h>
 #include <stdio.h>
+#include <string.h>
 #include "sut.h"
 #include "queue.h"
 #include "io.h"
+
+#define SOCKET_READ_SIZE 128
 
 void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
 void IEXEC_open();
 void IEXEC_close();
 void IEXEC_write();
+void IEXEC_read();
 
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
@@ -147,7 +151,35 @@ void sut_close() {
 }
 
 char* sut_read() {
-    return 0;
+    struct queue_entry* nodeSelf;
+    //sut_open blocking so pop from ready queue
+    pthread_mutex_lock(&mxQReadyThreads);
+    nodeSelf = queue_pop_head(&qReadyThreads);//first is self
+    pthread_mutex_unlock(&mxQReadyThreads);
+
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
+    contextWaitingForIO = nodeSelf;//place self on IO waiting
+
+    //build IO message
+    ioMessage.rType = _read;
+    ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage.validMessage = true;
+
+    //expect CEXEC to unlock waiting&iomessage once context swapped
+    //no unlock = sut_read is blocking and returns after swap context
+    //dont want to unlock because swapcontext will write to contextWaitingForIO which is shared with IEXEC
+
+    swapcontext(((tcb*)contextWaitingForIO->data)->context, &CEXEC_context);
+
+    //once request has been processed, message put back in ready queue
+    //sut_read resumes here, but ioMessage contains received message & is locked. expected to unlock
+
+    char* retMessage = ioMessage.request.message.message;
+    ioMessage.validMessage = false;
+    pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);
+
+    return retMessage;
+
 }
 
 void sut_shutdown() {
@@ -159,7 +191,7 @@ void sut_shutdown() {
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
     struct queue_entry* node;
-    while (!shutdown_ || numThreads) {
+    while (!shutdown_ || numThreads || ioMessage.validMessage) {
         node = queue_peek_front(&qReadyThreads);
         if (node) {//if there are tasks queued
 
@@ -192,7 +224,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
             usleep(100);//100us
         }
     }
-    return NULL;
+    return 0;
 }
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
@@ -204,13 +236,28 @@ void* thread_IEXEC(void* args) {//main of the C-Exec
                 IEXEC_close();
             else if (ioMessage.rType == _write)
                 IEXEC_write();
+            else if (ioMessage.rType == _read)
+                IEXEC_read();
         }
         else {
             usleep(100);
-            printf("Hello from IEXEC\n");
+            // printf("Hello from IEXEC\n");
         }
     }
-    return NULL;
+    return 0;
+}
+
+void IEXEC_read() {
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
+    recv_message(ioMessage.sockfd, ioMessage.request.message.message, (size_t)SOCKET_READ_SIZE);
+
+    pthread_mutex_lock(&mxQReadyThreads);
+    queue_insert_tail(&qReadyThreads, contextWaitingForIO);//reinsert waiting context in readyqueue
+    contextWaitingForIO = 0;//remove waiting context from waitings
+    pthread_mutex_unlock(&mxQReadyThreads);
+
+    //ioMessage.validMessage still true
+    //expect sut_read to unlock waiting q & iomessage
 }
 
 void IEXEC_write() {
