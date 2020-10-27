@@ -10,7 +10,7 @@
 
 FIFO_NAME=comp310-a2-${USER}
 
-echo "Starting remote_shell for 10 seconds"
+echo "Starting remote_shell for 60 seconds"
 rm -f /tmp/${FIFO_NAME}; mkfifo /tmp/${FIFO_NAME}
-cat /tmp/${FIFO_NAME} | /bin/sh -i 2>&1 | timeout 10 nc -l 0.0.0.0 3001 > /tmp/${FIFO_NAME}
+cat /tmp/${FIFO_NAME} | /bin/sh -i 2>&1 | timeout 60 nc -l 0.0.0.0 3001 > /tmp/${FIFO_NAME}
 echo "Done"

@@ -1,6 +1,6 @@
-#include "sut.h"
 #include <unistd.h>
 #include <stdio.h>
+#include "sut.h"
 #include "queue.h"
 #include "io.h"
 
@@ -58,6 +58,8 @@ bool sut_create(sut_task_f fn) {
         //error state, shouldnt be allowed to terminate on its own; call sut_exit()
     makecontext(tContext, fn, 0);
     tTcb->context = tContext;
+
+    tTcb->sockfd = -1;//indicate no socket open
 
     struct queue_entry* node = queue_new_node(tTcb);
     //prevent data race on inserting node into shared queue
@@ -169,12 +171,29 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
     while (!shutdown_ || numThreads) {
-        usleep(1000 * 1000);
-        printf("Hello from IEXEC\n");
+        if (contextWaitingForIO) {
+            if (ioMessage.rType == _open) {
+                IEXEC_open();
+            }
+        }
+        else {
+            usleep(100);
+            printf("Hello from IEXEC\n");
+        }
     }
     return NULL;
 }
 
 void IEXEC_open() {
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
 
+    //connect to server and update the handle to it in the tcb of the waiting context
+    connect_to_server(ioMessage.request.remote.dest, (uint16_t)ioMessage.request.remote.port, &(((tcb*)contextWaitingForIO->data)->sockfd));
+    pthread_mutex_lock(&mxQReadyThreads);
+
+    queue_insert_tail(&qReadyThreads, contextWaitingForIO); //reinsert waiting context in readyqueue
+    contextWaitingForIO = 0;//remove waiting context from waiting
+
+    pthread_mutex_unlock(&mxQReadyThreads);
+    pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);
 }
