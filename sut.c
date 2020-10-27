@@ -8,6 +8,7 @@ void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
 void IEXEC_open();
 void IEXEC_close();
+void IEXEC_write();
 
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
@@ -89,6 +90,10 @@ void sut_exit() {
     swapcontext((ucontext_t*)((tcb*)contextToCleanOnExit->data)->context, &CEXEC_context);
 }
 
+/**
+ * Assumes sut_open not called more than once before calling close.
+ * If it is, previous handle is overwritten and is lost.
+ */
 void sut_open(char* dest, int port) {
     struct queue_entry* nodeSelf;
     //sut_open blocking so pop from ready queue
@@ -100,7 +105,6 @@ void sut_open(char* dest, int port) {
     contextWaitingForIO = nodeSelf;//place self on IO waiting
 
     //build IO message
-    ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
     ioMessage.rType = _open;
     ioMessage.request.remote.dest = dest;
     ioMessage.request.remote.port = port;
@@ -115,7 +119,18 @@ void sut_open(char* dest, int port) {
 }
 
 void sut_write(char* buf, int size) {
+    char* bufcpy = strndup(buf, size);
+    struct queue_entry* nodeSelf = queue_peek_front(&qReadyThreads);
 
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
+    ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage.rType = _write;
+    ioMessage.request.message.message = bufcpy;
+    ioMessage.request.message.size = size;
+    //have to indicate validMessage last, otherwise IEXEC will start consuming
+    ioMessage.validMessage = true;
+
+    //no unlock expect IEXEC to unlock. blocks other threads from overwriting once context swap
 }
 
 void sut_close() {
@@ -125,6 +140,7 @@ void sut_close() {
     //build IO message
     ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
     ioMessage.rType = _close;
+    //have to indicate validMessage last, otherwise IEXEC can/will start consuming
     ioMessage.validMessage = true;
 
     //no unlock expect IEXEC to unlock. blocks other threads from overwriting once context swap
@@ -180,12 +196,14 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 }
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
-    while (!shutdown_ || numThreads) {
+    while (!shutdown_ || numThreads || ioMessage.validMessage) {
         if (ioMessage.validMessage) {
             if (ioMessage.rType == _open)
                 IEXEC_open();
             else if (ioMessage.rType == _close)
                 IEXEC_close();
+            else if (ioMessage.rType == _write)
+                IEXEC_write();
         }
         else {
             usleep(100);
@@ -194,6 +212,16 @@ void* thread_IEXEC(void* args) {//main of the C-Exec
     }
     return NULL;
 }
+
+void IEXEC_write() {
+    //expected to unlock already locked ioMessage
+    send_message(ioMessage.sockfd, ioMessage.request.message.message, (size_t)ioMessage.request.message.size);
+    //discard output, irrelevant success status b/c async
+    free(ioMessage.request.message.message);
+    ioMessage.validMessage = false;
+    pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);
+}
+
 void IEXEC_close() {
     //expected to unlock already locked ioMessage
     close(ioMessage.sockfd);//close file descriptor as requested

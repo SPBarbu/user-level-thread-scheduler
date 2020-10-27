@@ -22,11 +22,13 @@ void hello1() {
 void hello2() {
     for (int i = 0; i < 5; i++) {
         printf("%d Hello from hello2\n", i);
-        sut_create(hello3);
+        // sut_create(hello3);
         usleep(1000);
         sut_yield();
     }
     sut_open("0.0.0.0", 3001);
+    sut_write("*******", 8);
+    sut_close();
     sut_exit();
 }
 

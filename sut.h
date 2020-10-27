@@ -19,14 +19,14 @@ typedef struct __tcb {
 typedef struct __IOmessage {
     bool validMessage;//indicates if the message can be consummed, or is deprecated from last consume
     int sockfd;
-    enum __rType { _open, _close, _message } rType;
+    enum __rType { _open, _close, _write, _read } rType;
     union __request {
         struct __remote {
             char* dest;
             int port;
         }remote;
         struct __message {
-            char message[128];
+            char* message;
             int size;
         }message;
     }request;
