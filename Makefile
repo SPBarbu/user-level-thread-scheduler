@@ -4,6 +4,6 @@ CFLAGS=-fsanitize=signed-integer-overflow -fsanitize=undefined -g -std=gnu99 -O0
 TEST=ltester
 
 sut:
-	$(CC) $(TEST).c sut.c -l pthread -o ults $(CFLAGS)
+	$(CC) $(TEST).c sut.c io.c -l pthread -o ults $(CFLAGS)
 clean:
 	rm -rf mytest

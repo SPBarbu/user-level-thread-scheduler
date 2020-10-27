@@ -2,16 +2,18 @@
 #include <unistd.h>
 #include <stdio.h>
 #include "queue.h"
+#include "io.h"
 
 void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
+void IEXEC_open();
 
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
 struct queue_entry* contextToCleanOnExit;
 struct queue_entry* contextWaitingForIO;//assumes only one waiter at a time ie. if two, last will overwrite first
 int numThreads;
-bool shutdown;
+bool shutdown_;
 pthread_mutex_t mxNumThreads = PTHREAD_MUTEX_INITIALIZER;//prevent data race on create same time as exit
 pthread_mutex_t mxQReadyThreads = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mxContextWaitingForIO_mxIOMessage = PTHREAD_MUTEX_INITIALIZER;//shared between CEXEC & IEXEC
@@ -20,7 +22,7 @@ IOmessage ioMessage;
 
 void sut_init() {
     numThreads = 0;
-    shutdown = false;
+    shutdown_ = false;
 
     qReadyThreads = queue_create();
     queue_init(&qReadyThreads);//never move, only refer through pointer indirect
@@ -104,7 +106,7 @@ void sut_open(char* dest, int port) {
     //no unlock = sut_open is blocking and returns after swap context
     //dont want to unlock because swapcontext will write to contextWaitingForIO which is shared with IEXEC
 
-    swapcontext(((tcb*)contextWaitingForIO->data)->context, CEXEC_handle);
+    swapcontext(((tcb*)contextWaitingForIO->data)->context, &CEXEC_context);
 
 }
 
@@ -121,7 +123,7 @@ char* sut_read() {
 }
 
 void sut_shutdown() {
-    shutdown = true;//no lock b/c only writer
+    shutdown_ = true;//no lock b/c only writer
 
     pthread_join(CEXEC_handle, NULL);
     pthread_join(IEXEC_handle, NULL);
@@ -129,7 +131,7 @@ void sut_shutdown() {
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
     struct queue_entry* node;
-    while (!shutdown || numThreads) {
+    while (!shutdown_ || numThreads) {
         node = queue_peek_front(&qReadyThreads);
         if (node) {//if there are tasks queued
 
@@ -166,9 +168,13 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 }
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
-    while (true) {
+    while (!shutdown_ || numThreads) {
         usleep(1000 * 1000);
         printf("Hello from IEXEC\n");
     }
     return NULL;
+}
+
+void IEXEC_open() {
+
 }
