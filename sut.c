@@ -7,6 +7,7 @@
 void* thread_CEXEC(void* args);
 void* thread_IEXEC(void* args);
 void IEXEC_open();
+void IEXEC_close();
 
 pthread_t CEXEC_handle, IEXEC_handle;
 ucontext_t CEXEC_context;
@@ -103,6 +104,7 @@ void sut_open(char* dest, int port) {
     ioMessage.rType = _open;
     ioMessage.request.remote.dest = dest;
     ioMessage.request.remote.port = port;
+    ioMessage.validMessage = true;
 
     //expect CEXEC to unlock waiting&iomessage once context swapped
     //no unlock = sut_open is blocking and returns after swap context
@@ -117,7 +119,15 @@ void sut_write(char* buf, int size) {
 }
 
 void sut_close() {
+    struct queue_entry* nodeSelf = queue_peek_front(&qReadyThreads);
 
+    pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
+    //build IO message
+    ioMessage.sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage.rType = _close;
+    ioMessage.validMessage = true;
+
+    //no unlock expect IEXEC to unlock. blocks other threads from overwriting once context swap
 }
 
 char* sut_read() {
@@ -171,10 +181,11 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
     while (!shutdown_ || numThreads) {
-        if (contextWaitingForIO) {
-            if (ioMessage.rType == _open) {
+        if (ioMessage.validMessage) {
+            if (ioMessage.rType == _open)
                 IEXEC_open();
-            }
+            else if (ioMessage.rType == _close)
+                IEXEC_close();
         }
         else {
             usleep(100);
@@ -183,17 +194,23 @@ void* thread_IEXEC(void* args) {//main of the C-Exec
     }
     return NULL;
 }
+void IEXEC_close() {
+    //expected to unlock already locked ioMessage
+    close(ioMessage.sockfd);//close file descriptor as requested
+    ioMessage.validMessage = false;
+    pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);
+}
 
 void IEXEC_open() {
     pthread_mutex_lock(&mxContextWaitingForIO_mxIOMessage);
-
     //connect to server and update the handle to it in the tcb of the waiting context
     connect_to_server(ioMessage.request.remote.dest, (uint16_t)ioMessage.request.remote.port, &(((tcb*)contextWaitingForIO->data)->sockfd));
-    pthread_mutex_lock(&mxQReadyThreads);
 
+    pthread_mutex_lock(&mxQReadyThreads);
     queue_insert_tail(&qReadyThreads, contextWaitingForIO); //reinsert waiting context in readyqueue
     contextWaitingForIO = 0;//remove waiting context from waiting
-
+    ioMessage.validMessage = false;
     pthread_mutex_unlock(&mxQReadyThreads);
+
     pthread_mutex_unlock(&mxContextWaitingForIO_mxIOMessage);
 }

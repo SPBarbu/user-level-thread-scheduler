@@ -17,6 +17,7 @@ typedef struct __tcb {
 } tcb;
 
 typedef struct __IOmessage {
+    bool validMessage;//indicates if the message can be consummed, or is deprecated from last consume
     int sockfd;
     enum __rType { _open, _close, _message } rType;
     union __request {
