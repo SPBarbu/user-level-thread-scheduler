@@ -16,21 +16,22 @@ typedef struct __tcb {
     int sockfd; // assumes tasks can only have one io source/destination at a time
 } tcb;
 
+typedef enum __rType { _open, _close, _write, _read } _rType;
+
 typedef struct __IOmessage {
-    bool validMessage;//indicates if the message can be consummed, or is deprecated from last consume
     int sockfd;
-    enum __rType { _open, _close, _write, _read } rType;
+    _rType rType;
     union __request {
         struct __remote {
             char* dest;
             int port;
-        }remote;
+        }Remote;
         struct __message {
             char* message;
             int size;
-        }message;
-    }request;
-}IOmessage;
+        }Message;
+    }Request;
+}IOMessage;
 
 void sut_init();
 bool sut_create(sut_task_f fn);
