@@ -30,7 +30,9 @@ bool toWaitListSelfContext = false;
 struct queue qWaitingTasks;
 struct queue qtoioMessages;
 //need one mx for both queues so iexec doesnt start consuming one while the other is still unfinished
-pthread_mutex_t mx_waiting_io_queues = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mxQWaitingIO = PTHREAD_MUTEX_INITIALIZER;
+struct queue qAsyncIO;
+pthread_mutex_t mxQAsyncIO = PTHREAD_MUTEX_INITIALIZER;
 
 void sut_init() {
     numThreads = 0;
@@ -44,6 +46,9 @@ void sut_init() {
 
     qtoioMessages = queue_create();
     queue_init(&qtoioMessages);
+
+    qAsyncIO = queue_create();
+    queue_init(&qAsyncIO);
 
     pthread_create(&CEXEC_handle, NULL, thread_CEXEC, NULL);
     pthread_create(&IEXEC_handle, NULL, thread_IEXEC, NULL);
@@ -125,13 +130,45 @@ void sut_open(char* dest, int port) {
     //indicate to CEXEC to put self on waiting q
     toWaitListSelfContext = true;
 
-    pthread_mutex_lock(&mx_waiting_io_queues);
+    pthread_mutex_lock(&mxQWaitingIO);
 
     queue_insert_tail(&qtoioMessages, ioNode);
 
     sut_yield();
     //expect CEXEC to put our context on the waiting queue
     //& unlock both the waiting queue and ioMessages queue
+}
+
+void sut_write(char* buf, int size) {
+    struct queue_entry* nodeSelf = queue_peek_front(&qReadyThreads);
+
+    IOMessage* ioMessage = (IOMessage*)malloc(sizeof(IOMessage)); //TOFREE
+    ioMessage->sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage->rType = _write;
+    ioMessage->Request.Message.message = buf;
+    ioMessage->Request.Message.size = size;
+
+    struct queue_entry* ioNode = queue_new_node(ioMessage);//TOFREE
+
+    pthread_mutex_lock(&mxQAsyncIO);
+    queue_insert_tail(&qAsyncIO, ioNode);
+    pthread_mutex_unlock(&mxQAsyncIO);
+
+}
+
+void sut_close() {
+    struct queue_entry* nodeSelf = queue_peek_front(&qReadyThreads);
+
+    IOMessage* ioMessage = (IOMessage*)malloc(sizeof(IOMessage)); //TOFREE
+    ioMessage->sockfd = ((tcb*)nodeSelf->data)->sockfd;
+    ioMessage->rType = _close;
+
+    struct queue_entry* ioNode = queue_new_node(ioMessage);//TOFREE
+
+    pthread_mutex_lock(&mxQAsyncIO);
+    queue_insert_tail(&qAsyncIO, ioNode);
+    pthread_mutex_unlock(&mxQAsyncIO);
+
 }
 
 void* thread_CEXEC(void* args) {//main of the C-Exec
@@ -155,7 +192,7 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
                 node = queue_pop_head(&qReadyThreads);
                 queue_insert_tail(&qWaitingTasks, node);
 
-                pthread_mutex_unlock(&mx_waiting_io_queues);//allows IEXEC to start working on waiting tasks
+                pthread_mutex_unlock(&mxQWaitingIO);//allows IEXEC to start working on waiting tasks
                 toWaitListSelfContext = false;//indicates task has been moved to wait list
             }
             else {//sut_exit not called, requeue task
@@ -178,16 +215,17 @@ void* thread_CEXEC(void* args) {//main of the C-Exec
 
 void* thread_IEXEC(void* args) {//main of the C-Exec
     struct queue_entry* ioMessageNode = queue_peek_front(&qtoioMessages);
+    struct queue_entry* asynIONode;
     _rType requestType;
     while (!shutdown_ || numThreads || ioMessageNode) {
         if (ioMessageNode) {
             requestType = ((IOMessage*)ioMessageNode->data)->rType;
             if (requestType == _open)
                 IEXEC_open();
-            // else if (requestType == _close)
-            //     IEXEC_close();
-            // else if (requestType == _write)
-            //     IEXEC_write();
+            else if (requestType == _close)
+                IEXEC_close();
+            else if (requestType == _write)
+                IEXEC_write();
             // else if (requestType == _read)
             //     IEXEC_read();
         }
@@ -195,6 +233,17 @@ void* thread_IEXEC(void* args) {//main of the C-Exec
             usleep(100);
             // printf("Hello from IEXEC\n");
         }
+
+        //move all async requests to the io queue that IEXEC processes
+        pthread_mutex_lock(&mxQAsyncIO);
+        pthread_mutex_lock(&mxQWaitingIO);
+        while ((asynIONode = queue_pop_head(&qAsyncIO))) {
+            queue_insert_tail(&qtoioMessages, asynIONode);
+        }
+        pthread_mutex_unlock(&mxQWaitingIO);
+        pthread_mutex_unlock(&mxQAsyncIO);
+
+        //update if tasks are to be processed
         ioMessageNode = queue_peek_front(&qtoioMessages);
     }
     return 0;
@@ -203,23 +252,51 @@ void* thread_IEXEC(void* args) {//main of the C-Exec
 void IEXEC_open() {
     //connect to server and update the handle to it in the tcb of the waiting context
 
-    pthread_mutex_lock(&mx_waiting_io_queues);
-
+    pthread_mutex_lock(&mxQWaitingIO);
     struct queue_entry* selfWaitNode = queue_pop_head(&qWaitingTasks);
     struct queue_entry* selfIOMessageNode = queue_pop_head(&qtoioMessages);
-
-    pthread_mutex_unlock(&mx_waiting_io_queues);
+    pthread_mutex_unlock(&mxQWaitingIO);
 
     char* dest = ((IOMessage*)selfIOMessageNode->data)->Request.Remote.dest;
     int port = ((IOMessage*)selfIOMessageNode->data)->Request.Remote.port;
+    int* sockfd = &((IOMessage*)selfIOMessageNode->data)->sockfd;
 
-    printf("%d\n", connect_to_server(dest, (uint16_t)port, &((tcb*)selfWaitNode->data)->sockfd));
+    connect_to_server(dest, (uint16_t)port, sockfd);
 
+    //reinsert waiting context in readyqueue
     pthread_mutex_lock(&mxQReadyThreads);
-    queue_insert_tail(&qReadyThreads, selfWaitNode); //reinsert waiting context in readyqueue
+    queue_insert_tail(&qReadyThreads, selfWaitNode);
     pthread_mutex_unlock(&mxQReadyThreads);
 
     free((IOMessage*)selfIOMessageNode->data);
     free(selfIOMessageNode);
 
+}
+
+void IEXEC_write() {
+    pthread_mutex_lock(&mxQWaitingIO);
+    struct queue_entry* selfIOMessageNode = queue_pop_head(&qtoioMessages);
+    pthread_mutex_unlock(&mxQWaitingIO);
+
+    char* buf = ((IOMessage*)selfIOMessageNode->data)->Request.Message.message;
+    int size = ((IOMessage*)selfIOMessageNode->data)->Request.Message.size;
+    int sockfd = ((IOMessage*)selfIOMessageNode->data)->sockfd;
+
+    send_message(sockfd, buf, (size_t)size);
+
+    free((IOMessage*)selfIOMessageNode->data);
+    free(selfIOMessageNode);
+}
+
+void IEXEC_close() {
+    pthread_mutex_lock(&mxQWaitingIO);
+    struct queue_entry* selfIOMessageNode = queue_pop_head(&qtoioMessages);
+    pthread_mutex_unlock(&mxQWaitingIO);
+
+    int sockfd = ((IOMessage*)selfIOMessageNode->data)->sockfd;
+
+    close(sockfd);
+
+    free((IOMessage*)selfIOMessageNode->data);
+    free(selfIOMessageNode);
 }

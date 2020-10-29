@@ -1,41 +1,22 @@
 #include "sut.h"
-#include <stdio.h>
 #include <unistd.h>
-
-void hello3() {
-    for (int i = 0; i < 5; i++) {
-        printf("%d Hello from hello3\n", i);
-        usleep(1000);
-        sut_yield();
-    }
-    sut_exit();
-}
+#include <stdio.h>
 
 void hello1() {
-    for (int i = 0; i < 1; i++) {
-        printf("%d Hello from hello1\n", i);
-        usleep(1000);
-        sut_yield();
-    }
-    sut_exit();
-}
-void hello2() {
-    for (int i = 0; i < 5; i++) {
-        printf("%d Hello from hello2\n", i);
-        // sut_create(hello3);
-        usleep(1000);
-        sut_yield();
-    }
+    int i;
     sut_open("0.0.0.0", 10000);
-    // sut_read();
-    sut_write("ls", 8);
-    printf("%s\n", sut_read());
+    for (i = 0; i < 10; i++) {
+        printf("Hello world!, this is SUT-One \n");
+        sut_yield();
+        sut_write("aaaa\n", 5);
+    }
     sut_close();
+    usleep(1000000);
     sut_exit();
 }
 
 int main() {
     sut_init();
-    sut_create(hello2);
+    sut_create(hello1);
     sut_shutdown();
 }
