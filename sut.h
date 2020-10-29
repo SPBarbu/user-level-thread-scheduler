@@ -6,8 +6,9 @@
 #include <stdbool.h>
 #include <ucontext.h>
 
-#define MAX_THREADS 16
+#define MAX_THREADS 32
 #define THREAD_STACK_SIZE 1024*64
+#define SOCKET_READ_SIZE 128
 
 typedef void (*sut_task_f)();
 
@@ -18,9 +19,11 @@ typedef struct __tcb {
 
 typedef enum __rType { _open, _close, _write, _read } _rType;
 
-typedef struct __IOmessage {
+typedef struct __IOMessage {
     int sockfd;
     _rType rType;
+    //union as to not waste as much memory since __IOMessage is the goto structure
+    //for all IEXEC-CEXEC communication. Simplifies communication but wastes some memory
     union __request {
         struct __remote {
             char* dest;
