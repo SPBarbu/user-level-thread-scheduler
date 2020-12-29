@@ -1,4 +1,0 @@
-Valgrind indicates memory leaks on my IEXEC and CEXEC pthread_creates,
-but this is probably an issue with Valgrind because the threads are successfully joined by pthread_join in sut_shutdown.
-
-The connection in IEXEC is TCP so it is assumed that the library user will either sleep before calling sut_read or call sut_read multiple times to receive all their data.
